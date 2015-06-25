@@ -128,8 +128,11 @@ void wyc_socket_connect(char *ip,int fd,int port){
 			goto jcon;
 		}
 		//perror("connect mid error");
-		if(nsec <= MAXSLEEP/2)
+		if(nsec <= MAXSLEEP/2){
+			printf("sleep %d s,",nsec);
+			perror("connec error");
 			sleep(nsec);
+		}
 	}
 jcon:	
 	if(0 != connflag){

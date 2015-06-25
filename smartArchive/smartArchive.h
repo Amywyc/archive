@@ -5,7 +5,7 @@
 #include<unistd.h>
 
 #define		NODE_MAX		8
-#define		BLOCKID_MAX		480
+#define		BLOCKID_MAX		180
 #define 	K_MAX			10
 #define		K_MIN			4
 #define		R_MAX			3

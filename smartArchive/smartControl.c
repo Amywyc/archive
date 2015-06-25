@@ -16,6 +16,9 @@ char 	IP[NODE_MAX][IPLENGYH];
 int 	ipSequence;
 int 	ipCount;
 
+int	socketStart;
+pthread_mutex_t			socketStartMutex;
+
 
 //data
 int BLK_2_ND[NODE_MAX][BLOCKID_MAX];
@@ -95,6 +98,9 @@ void init_wyc(){
 
 	stripHandlerCount=0;
 	pthread_mutex_init(&stripHandlerCountMutex,NULL);
+
+	socketStart=0;
+	pthread_mutex_init(&socketStartMutex,NULL);
 	
 }
 
@@ -103,6 +109,8 @@ void free_wyc(){
 	pthread_attr_destroy(&attr);
 
 	pthread_mutex_destroy(&stripHandlerCountMutex);
+
+	pthread_mutex_destroy(&socketStartMutex);
 
 }
 
@@ -161,7 +169,9 @@ void* stripHandler(void* arg){
 	coding_result res;
 
 	int socket=doAsClient(encodingStrip[stripID]->coding_node);//PORT
-
+	pthread_mutex_lock(&socketStartMutex);
+	socketStart++;
+	pthread_mutex_unlock(&socketStartMutex);	
 	if((write(socket,encodingStrip[stripID],sizeof(coding_strip_str)))!=sizeof(coding_strip_str)){
 		perror("error:smartnode write coding_strip_str");
 		exit(1);
@@ -291,8 +301,10 @@ void* encodeNodeChoose(){
 		pthread_mutex_unlock(&stripHandlerCountMutex);
 	}
 
-	while(stripHandlerCount!=0)
+	while(stripHandlerCount!=0){
+		printf("socketStart:%d unfinished:%d\n",socketStart,stripHandlerCount);
 		sleep(1);
+	}
 	//done
 
 	if(fclose(nodeFile)!=0){
