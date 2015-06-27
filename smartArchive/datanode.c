@@ -1199,12 +1199,28 @@ void* smartnodeListener(){
 static int doAsClient(int server_seq,int port){
 	
 	int client_socket=-1;
-
+	int times=5;
+	int ret;
+again:
 	client_socket= wyc_socket_client_create();
 
-	printf("Do_as_client(IP):%s\n",IP[server_seq]);
-	wyc_socket_connect(IP[server_seq],client_socket,port+server_seq);
-	printf("Do_as_client:(socket):%d\n",client_socket);
+//	printf("Do_as_client(IP):%s\n",IP[server_seq]);
+	ret=wyc_socket_connect(IP[server_seq],client_socket,port+server_seq);
+//	printf("Do_as_client:(socket):%d\n",client_socket);
+
+	if((ret!=0)&&(times>0)){
+		wyc_socket_close(client_socket);
+		times-- ;
+		printf("sleep 1 for connect refused\n");
+		sleep(1);
+		goto again;
+	}
+
+	if(ret!=0){
+		printf("connect error end\n");
+		exit(1);
+	}
+
 
 	return client_socket;
 

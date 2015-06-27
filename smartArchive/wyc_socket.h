@@ -90,7 +90,7 @@ int wyc_socket_client_create(){
 	return fd;
 }
 
-void wyc_socket_connect(char *ip,int fd,int port){
+int wyc_socket_connect(char *ip,int fd,int port){
 	struct hostent *he;
 	struct sockaddr_in server;
 
@@ -122,24 +122,26 @@ void wyc_socket_connect(char *ip,int fd,int port){
 		exit(1);
 	}	
 
-	int nsec,connflag=-1;
-	for(nsec=1;nsec <= MAXSLEEP;nsec <<= 1){
-		if(0 == (connflag=connect(fd,(struct sockaddr *)&server,sizeof(struct sockaddr)))){
-			goto jcon;
-		}
-		//perror("connect mid error");
-		if(nsec <= MAXSLEEP/2){
-			printf("sleep %d s,",nsec);
-			perror("connec error");
-			sleep(nsec);
-		}
-	}
-jcon:	
-	if(0 != connflag){
-		printf("Connect error(%s).\n",ip);
-		perror("connect error");
-		pthread_exit(NULL);
-	}
+	return connect(fd,(struct sockaddr *)&server,sizeof(struct sockaddr));
+
+//	int nsec,connflag=-1;
+//	for(nsec=1;nsec <= MAXSLEEP;nsec <<= 1){
+//		if(0 == (connflag=connect(fd,(struct sockaddr *)&server,sizeof(struct sockaddr)))){
+//			goto jcon;
+//		}
+//		//perror("connect mid error");
+//		if(nsec <= MAXSLEEP/2){
+//			printf("sleep %d s,",nsec);
+//			perror("connec error");
+//			sleep(nsec);
+//		}
+//	}
+//jcon:	
+//	if(0 != connflag){
+//		printf("Connect error(%s).\n",ip);
+//		perror("connect error");
+//		pthread_exit(NULL);
+//	}
 }
 
 

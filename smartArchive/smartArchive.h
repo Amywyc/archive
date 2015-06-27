@@ -13,8 +13,8 @@
 #define 	PORT			12345
 #define		DATAPORT		12000
 #define 	IPLENGYH		16			//###.###.###.###
-#define		RS_K			4
-#define		RS_R			1
+#define		RS_K			10
+#define		RS_R			4
 #define		IPFILE			("ip.config")
 #define		BLOCK_SIZE		(64*1024*1024)   	//B
 #define		CHUNK_SIZE		(64*1024)			//B

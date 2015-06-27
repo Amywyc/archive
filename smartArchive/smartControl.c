@@ -80,7 +80,7 @@ void init_wyc(){
 		encodingStrip[i]=NULL;
 	actionSocketCount=0;
 	encodingStripID=0;
-	encodingNodeChooseWay=2;    //1 DArch 2 PArch
+	encodingNodeChooseWay=1;    //1 DArch 2 PArch 3 BArch
 
 	getIP();					//read IP from file
 //	smartSocketToDatanode();	//socket smartnode to every datanode
@@ -348,13 +348,34 @@ static void doAsServer(){
 }
 
 static int doAsClient(int server_seq){
+
+	if((server_seq<0)||(server_seq>7)){
+		printf("error : wrong server_seq\n");
+		exit(1);
+	}
+	
 	printf("server_seq:%d\n",server_seq);
+	int times=5;
+	int ret=0;
 	
 	int client_socket=-1;
-
+again:
 	client_socket= wyc_socket_client_create();
 		
-	wyc_socket_connect(IP[server_seq],client_socket,PORT+server_seq);
+	ret=wyc_socket_connect(IP[server_seq],client_socket,PORT+server_seq);
+
+	if((ret!=0)&&(times>0)){
+		wyc_socket_close(client_socket);
+		times-- ;
+		printf("sleep 1 for connect refused\n");
+		sleep(2);
+		goto again;
+	}
+
+	if(ret!=0){
+		printf("connect error end\n");
+		exit(1);
+	}
 
 	printf("Do_as_client:socket ready!\n");
 
