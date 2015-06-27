@@ -80,7 +80,7 @@ void init_wyc(){
 		encodingStrip[i]=NULL;
 	actionSocketCount=0;
 	encodingStripID=0;
-	encodingNodeChooseWay=1;    //1 DArch 2 PArch 3 BArch
+	encodingNodeChooseWay=3;    //1 DArch 2 PArch 3 BArch
 
 	getIP();					//read IP from file
 //	smartSocketToDatanode();	//socket smartnode to every datanode
@@ -276,7 +276,7 @@ void* encodeNodeChoose(){
 				break;
 			case 3:
 				//BArch
-				chooseCodingnodeByNoLocality(i,RS_K,RS_R,encodingStrip[encodingStripID]);
+				chooseCodingnodeByBalance(i,RS_K,RS_R,encodingStrip[encodingStripID]);
 				break;
 			default:
 				printf("error:encodingNodeChooseWay[0\1\2]:%d\n",encodingNodeChooseWay);
@@ -548,24 +548,30 @@ void chooseCodingnodeByBalance(int blockID,int k,int r,coding_strip_str* codestr
 			minTaskIndex=i;
 		}
 	codestruct->coding_node=minTaskIndex;
-	TASK_MAP[codestruct->coding_node] += codestruct->parity_blocks_num;
+	//TASK_MAP[codestruct->coding_node] += codestruct->parity_blocks_num;
 	//get data node
+	int localIndex=-1;
+	for(i=0;i<k;i++)
+		if(BLK_2_ND[codestruct->coding_node][blockID+i]==1){
+			localIndex=i;
+			codestruct->locality=1;
+			codestruct->data_node_arr[i]=codestruct->coding_node;
+			break;
+		}
 	for(i=0;i<k;i++){
-		minTask=INT_MAX;
-		minTaskIndex=-1;
-		for(j=0;j<node_cur_max;j++)
-			if(BLK_2_ND[j][blockID+i]==1){
-				if(TASK_MAP[j]<minTask){
-					minTask=TASK_MAP[j];
-					minTaskIndex=j;
+		if(i!=localIndex){
+			minTask=INT_MAX;
+			minTaskIndex=-1;
+			for(j=0;j<node_cur_max;j++)
+				if((BLK_2_ND[j][blockID+i]==1)&&(j!=codestruct->coding_node)){
+					if(TASK_MAP[j]<minTask){
+						minTask=TASK_MAP[j];
+						minTaskIndex=j;
+					}
 				}
-			}
-		codestruct->data_node_arr[i]=minTaskIndex;
-		if(minTaskIndex!=codestruct->coding_node){
+			codestruct->data_node_arr[i]=minTaskIndex;
 			TASK_MAP[minTaskIndex]++;
 			TASK_MAP[codestruct->coding_node]++;
-		}else{
-			(codestruct->locality)++;
 		}
 	}
 }
