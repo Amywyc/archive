@@ -80,7 +80,7 @@ void init_wyc(){
 		encodingStrip[i]=NULL;
 	actionSocketCount=0;
 	encodingStripID=0;
-	encodingNodeChooseWay=0;    //set in main ,default 0
+	encodingNodeChooseWay=2;    //1 DArch 2 PArch
 
 	getIP();					//read IP from file
 //	smartSocketToDatanode();	//socket smartnode to every datanode
@@ -261,22 +261,28 @@ void* encodeNodeChoose(){
 		encodingStrip[encodingStripID]->stripID = encodingStripID;
 		switch (encodingNodeChooseWay){
 			case 0:
-				//DArch
-				chooseCodingnodeByLocality(i,RS_K,RS_R,encodingStrip[encodingStripID]);
+				//CArch
+				//chooseCodingnodeByLocality(i,RS_K,RS_R,encodingStrip[encodingStripID]);
 				break;
 			case 1:
-				chooseCodingnodeByBalance(i,RS_K,RS_R,encodingStrip[encodingStripID]);
+				//DArch
+				//chooseCodingnodeByBalance(i,RS_K,RS_R,encodingStrip[encodingStripID]);
+				chooseCodingnodeByLocality(i,RS_K,RS_R,encodingStrip[encodingStripID]);
 				break;
 			case 2:
-				chooseCodingnodeByBalAndLol(i,RS_K,RS_R,encodingStrip[encodingStripID]);
+				//PArch
+				//chooseCodingnodeByBalAndLol(i,RS_K,RS_R,encodingStrip[encodingStripID]);
+				chooseCodingnodeByLocality(i,RS_K,RS_R,encodingStrip[encodingStripID]);
 				break;
 			case 3:
+				//BArch
 				chooseCodingnodeByNoLocality(i,RS_K,RS_R,encodingStrip[encodingStripID]);
 				break;
 			default:
 				printf("error:encodingNodeChooseWay[0\1\2]:%d\n",encodingNodeChooseWay);
 				exit(1);
 		}
+		encodingStrip[encodingStripID]->codeWay=encodingNodeChooseWay;
 		printf("In encodeNodeChoose:");
 		printCodingStripStruct(encodingStrip[encodingStripID]);
 		if(fprintf(nodeFile,"%d,%d,%d,%d,%d,%d,%d\n",

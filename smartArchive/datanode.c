@@ -5,6 +5,7 @@
 #include"wyc_socket.h"
 
 
+
 #endif
 
 #define IPREFSIZE		(sizeof(struct ifreq))
@@ -78,6 +79,185 @@ void codeSubFunction();
 
 void XOR_wyc(char* dest,char* src1,char* src2,int size);
 
+pbuf_manager* pbuf_manager_ptr;
+//p_buf
+void init_pbuf_manager(){
+	int i;
+	if(NULL==(pbuf_manager_ptr=(pbuf_manager*)malloc(sizeof(pbuf_manager)))){
+		perror("error malloc in init_pbuf_manager");
+		exit(1);
+	}
+	pbuf_manager_ptr->total = (((double)TOTAL_MEM*1024)/(MEM_BUF_SIZE/1024));
+	pbuf_manager_ptr->used = 0;
+	if(NULL==(pbuf_manager_ptr->pbuf_usage=
+		(int*)malloc((pbuf_manager_ptr->total)*(sizeof(int))))){
+		perror("error malloc in init_pbuf_manager");
+		exit(1);
+	}
+	for(i=0;i<pbuf_manager_ptr->total;i++)
+		pbuf_manager_ptr->pbuf_usage[i]=0;
+	if(NULL==(pbuf_manager_ptr->pbuf_address=
+		(p_buf**)malloc((pbuf_manager_ptr->total)*sizeof(p_buf*)))){
+		perror("error malloc in init_pbuf_manager");
+		exit(1);
+	}
+	for(i=0;i<pbuf_manager_ptr->total;i++){
+		if(NULL==(pbuf_manager_ptr->pbuf_address[i]=
+			(p_buf*)malloc(sizeof(p_buf)))){
+			perror("error malloc in init_pbuf_manager");
+			exit(1);
+		}
+		(pbuf_manager_ptr->pbuf_address[i])->cur_size = 0;
+		(pbuf_manager_ptr->pbuf_address[i])->max_size = MEM_BUF_SIZE;//??????
+		(pbuf_manager_ptr->pbuf_address[i])->count = 0;
+		(pbuf_manager_ptr->pbuf_address[i])->cur_offset = 0;
+	
+		INIT_LIST_HEAD(&((pbuf_manager_ptr->pbuf_address[i])->head));
+	
+		if(0 != pthread_mutex_init(&((pbuf_manager_ptr->pbuf_address[i])->lock),NULL)){
+			perror("Pthread_mutex_init error");
+			exit(1);
+		}
+
+		if(0 != pthread_mutex_init(&((pbuf_manager_ptr->pbuf_address[i])->head_lock),NULL)){
+			perror("Pthread_mutex_init error");
+			exit(1);
+		}
+
+		if(NULL == ((pbuf_manager_ptr->pbuf_address[i])->buf = 
+			(char *)malloc(sizeof(char)*((pbuf_manager_ptr->pbuf_address[i])->max_size)))){
+			perror("Malloc error");
+			exit(1);
+		}
+	}
+	pthread_mutex_init(&(pbuf_manager_ptr->managerMutex),NULL);
+	
+}
+
+void destory_pbuf_manager(){
+	int i;
+	for(i=0;i<pbuf_manager_ptr->total;i++){
+			
+		pthread_mutex_destroy(&((pbuf_manager_ptr->pbuf_address[i])->lock));
+		
+		pthread_mutex_destroy(&((pbuf_manager_ptr->pbuf_address[i])->head_lock));
+		
+		free((pbuf_manager_ptr->pbuf_address[i])->buf);
+		
+		free(pbuf_manager_ptr->pbuf_address[i]);
+	
+	}
+
+	free(pbuf_manager_ptr->pbuf_address);
+
+	free(pbuf_manager_ptr->pbuf_usage);
+
+	free(pbuf_manager_ptr);
+
+	pthread_mutex_destroy(&(pbuf_manager_ptr->managerMutex));
+	
+}
+
+int get_pbuf(){
+	int i;
+	while(pbuf_manager_ptr->used>=pbuf_manager_ptr->total){
+		printf("no pbuf,sleep 1 \n");
+		sleep(1);
+	}
+	for(i=0;i<pbuf_manager_ptr->total;i++){
+		if(pbuf_manager_ptr->pbuf_usage[i]==0){
+			pbuf_manager_ptr->pbuf_usage[i]=1;
+			return i;
+		}
+	}
+	printf("pbuf_manager used error\n");
+	exit(1);
+	return -1;
+}
+
+void put_pbuf(int index){
+	if((index<0)||(index>=pbuf_manager_ptr->total)){
+		printf("error:wrong index\n");
+		exit(1);
+	}
+	if(pbuf_manager_ptr->pbuf_usage[index]==0){
+		printf("error:index is idle\n");
+		exit(1);
+	}
+	pbuf_manager_ptr->pbuf_usage[index]=0;
+	(pbuf_manager_ptr->used)--;
+}
+
+void updata_in_pbuf(p_buf *p_cur_buf,char *databuf,size_t size,off_t offset){
+
+	list_head	head;
+	off_t		newcuroffset;
+	head.data_off = offset;
+
+	while((p_cur_buf->cur_size + sizeof(head) + size) > p_cur_buf->max_size){
+		printf("updata_in_pbuf:p_buf full,wait 0.1 seconds\n");
+		usleep(100000);
+	}
+
+	newcuroffset = p_cur_buf->cur_offset + sizeof(head) + size;
+	while((newcuroffset > p_cur_buf->max_size) && \
+		((p_cur_buf->max_size-p_cur_buf->cur_offset) + \
+		p_cur_buf->cur_size + sizeof(head) + size >p_cur_buf->max_size)){
+		printf("Litter buffer fragmentary:wait 0.1 seconds\n");
+		usleep(100000);
+	}
+
+	
+	pthread_mutex_lock(&(p_cur_buf->lock));
+	
+	(p_cur_buf->count)++;
+	
+	if(newcuroffset > p_cur_buf->max_size){
+		newcuroffset = sizeof(head) + size;
+		p_cur_buf->cur_offset = 0;
+	}
+
+	head.pbuf_off = p_cur_buf->cur_offset;
+	
+	p_cur_buf->cur_size = p_cur_buf->cur_size + sizeof(head) + size;
+	pthread_mutex_unlock(&(p_cur_buf->lock));
+
+	memcpy((p_cur_buf->buf+p_cur_buf->cur_offset),&(head),sizeof(head));
+
+	pthread_mutex_lock(&(p_cur_buf->head_lock));
+	list_add_tail(((list_head *)(p_cur_buf->buf+p_cur_buf->cur_offset)),&(p_cur_buf->head));
+	pthread_mutex_unlock(&(p_cur_buf->head_lock));
+
+	memcpy((p_cur_buf->buf+p_cur_buf->cur_offset+sizeof(head)),databuf,size);
+
+	pthread_mutex_lock(&(p_cur_buf->lock));
+	p_cur_buf->cur_offset = newcuroffset;
+	pthread_mutex_unlock(&(p_cur_buf->lock));
+}
+
+off_t updata_out_pbuf(p_buf *p_cur_buf,char *databuf){
+
+	list_head	head;
+
+	while(p_cur_buf->count <= 0){
+		printf("Updata_out_pbuf:no data to out,wait 0.1 seconds.\n");
+		usleep(100000);
+	}
+	
+	memcpy(&head,p_cur_buf->buf+(((p_cur_buf->head).next)->pbuf_off),sizeof(head));
+	memcpy(databuf,p_cur_buf->buf+(((p_cur_buf->head).next)->pbuf_off)+sizeof(head),CHUNK_SIZE);
+
+	pthread_mutex_lock(&(p_cur_buf->head_lock));		
+	list_del(p_cur_buf->head.next);
+	pthread_mutex_unlock(&(p_cur_buf->head_lock));
+		
+	pthread_mutex_lock(&(p_cur_buf->lock));	
+	p_cur_buf->cur_size = p_cur_buf->cur_size - sizeof(head) - CHUNK_SIZE;
+	(p_cur_buf->count)--;
+	pthread_mutex_unlock(&(p_cur_buf->lock));
+
+	return (head.data_off);
+}
 
 
 int main(){
@@ -199,6 +379,8 @@ void init_wyc(){
 	get_srvdisk();
 	get_diskfd();
 
+	init_pbuf_manager();
+
 }
 
 void free_wyc(){
@@ -222,6 +404,8 @@ void free_wyc(){
 		perror("error fclse stripTimeResultFile");
 		exit(1);
 	}
+
+	destory_pbuf_manager();
 }
 
 void* datanodeListener(){
@@ -327,37 +511,17 @@ void* codeSubSend(void* arg){
 	return ((void*)0);
 }
 
-void* codeSub(void* arg){
-//without memory cache
+void codeSub_read_dire(int socket){
+
 	int i;
-
-	data_request* codeRequestPtr=NULL;
-
-	int socket=*(int*)arg;
-	*(int*)arg=0;
-
 	char* chunk_buf;
 	int shouldByte=CHUNK_SIZE,nowBytes,nBytes;
 
-	if((codeRequestPtr=(data_request*)malloc(sizeof(data_request)))==NULL){
-		perror("error:malloc data_request");
-		exit(1);
-	}
-//	if((chunk_buf=(char*)malloc(CHUNK_SIZE))==NULL){
-//		perror("error:malloc chunk_buf");
-//		exit(1);
-//	}
 	if(0!=posix_memalign((void **)&chunk_buf,getpagesize(),CHUNK_SIZE)){
 		perror("error posix_memalign CHUNKSIZE");
 		exit(1);
 	}
-
-	if((read(socket,codeRequestPtr,sizeof(data_request)))!=sizeof(data_request)){
-		perror("error:read data_request");
-		exit(1);
-	}
-	printf("data_request:%d,%d\n",codeRequestPtr->blockID,codeRequestPtr->codingNode);
-
+	
 	int lseekRam=rand();
 	lseekRam = lseekRam - lseekRam%getpagesize();
 	if((lseek(localfd,(off_t)lseekRam,SEEK_SET))==-1){
@@ -381,11 +545,107 @@ void* codeSub(void* arg){
 	}
 
 	printf("done!\n");
-	
-	free(codeRequestPtr);
 	free(chunk_buf);
+}
 
+void* readWithCache(void* cache_index_ptr){
+	int i;
+	char* chunk_buf;
+	int cache_index=*(int*)cache_index_ptr;
 
+	if(0!=posix_memalign((void **)&chunk_buf,getpagesize(),CHUNK_SIZE)){
+		perror("error posix_memalign CHUNKSIZE");
+		exit(1);
+	}
+	
+	int lseekRam=rand();
+	lseekRam = lseekRam - lseekRam%getpagesize();
+	if((lseek(localfd,(off_t)lseekRam,SEEK_SET))==-1){
+		perror("error: lseek");
+		exit(1);
+	}
+	
+	for(i=0;i<CHUNK_NUM;i++){
+		if((read(localfd,chunk_buf,CHUNK_SIZE))!=CHUNK_SIZE){
+			perror("error2:read disk");
+			exit(1);
+		}
+		printf("(done %d) in pbuf number:%d\n",i,cache_index);
+		updata_in_pbuf(pbuf_manager_ptr->pbuf_address[cache_index],
+			chunk_buf,CHUNK_SIZE,i*CHUNK_SIZE);
+	}
+	free(chunk_buf);
+}
+
+void codeSub_read_withCache(int socket){
+	//get cache
+	int cache_index;
+	pthread_mutex_lock(&(pbuf_manager_ptr->managerMutex));
+	cache_index=get_pbuf();
+	pthread_mutex_unlock(&(pbuf_manager_ptr->managerMutex));
+
+	//pthread
+	pthread_t	read_pthread;
+	if(0!=pthread_create(&read_pthread,&detachAttr,readWithCache,&cache_index)){
+		perror("error pthead_create in codeSub_read_withCache");
+		exit(1);
+	}
+	//send data
+	int shouldBytes=CHUNK_SIZE,nowBytes,nBytes;
+	char* buf;
+	int i;
+	if(NULL==(buf=(char*)malloc(CHUNK_SIZE))){
+		perror("error malloc in codeSub_read_withCache");
+		exit(1);
+	}
+	for(i=0;i<CHUNK_NUM;i++){
+		printf("(done count:%d)out pbuf number:%d\n",i,cache_index);
+		updata_out_pbuf(pbuf_manager_ptr->pbuf_address[cache_index],buf);
+		nowBytes=0;
+		while(nowBytes<shouldBytes){
+			if(0>(nBytes=write(socket,buf+nowBytes,shouldBytes-nowBytes))){
+				perror("error write in codeSub_read_withCache");
+				exit(1);
+			}else{
+				nowBytes += nBytes;
+			}
+		}
+	}
+	//put cache
+	pthread_mutex_lock(&(pbuf_manager_ptr->managerMutex));
+	put_pbuf(cache_index);
+	pthread_mutex_unlock(&(pbuf_manager_ptr->managerMutex));
+	//done
+	printf("done!\n");
+}
+
+void* codeSub(void* arg){
+//without memory cache
+
+	data_request* codeRequestPtr=NULL;
+
+	int socket=*(int*)arg;
+//	*(int*)arg=0;
+
+	if((codeRequestPtr=(data_request*)malloc(sizeof(data_request)))==NULL){
+		perror("error:malloc data_request");
+		exit(1);
+	}
+
+	if((read(socket,codeRequestPtr,sizeof(data_request)))!=sizeof(data_request)){
+		perror("error:read data_request");
+		exit(1);
+	}
+	printf("data_request:%d,%d\n",codeRequestPtr->blockID,codeRequestPtr->codingNode);
+
+	if(codeRequestPtr->codeWay!=2){
+		codeSub_read_dire(socket);
+	}else{
+		codeSub_read_withCache(socket);
+	}
+	
+
+	free(codeRequestPtr);
 	close(socket);
 	free(arg);
 
@@ -462,47 +722,6 @@ void* codeSub2(void* arg){
 	return ((void*)0);
 }
 
-//void* datanodeListen(void* arg){
-
-//	pthread_t	codeSubPthread;
-
-//	int datanode = *(int*)arg;
-//	erase_code_sub* codesubPtr=NULL;
-//	data_request* requestPtr=NULL;
-
-//	if((requestPtr=(data_request*)malloc(sizeof(data_request)))==NULL){
-//		printf("error:malloc data_request\n");
-//		exit(1);
-//	}
-
-//	while(1){
-//		
-//		if((codesubPtr=(erase_code_sub*)malloc(sizeof(erase_code_sub)))==NULL){
-//			perror("error:malloc erase_code_sub");
-//			exit(1);
-//		}
-
-//		if((read(datanodeSocket[datanode],requestPtr,sizeof(data_request)))!=sizeof(data_request)){
-//			perror("error:read data_request");
-//			exit(1);
-//		}
-
-//		codesubPtr->blockID=requestPtr->blockID;
-//		codesubPtr->codingNode=requestPtr->codingNode;
-//		codesubPtr->readNum=0;
-//		codesubPtr->sendNum=0;
-//		codesubPtr->toalNum=CHUNK_NUM;
-
-//		if((pthread_create(&codeSubPthread,&detachAttr,codeSub,codesubPtr))!=0){
-//			perror("error:pthread_create codeSub");
-//			exit(1);
-//		}
-
-//		codesubPtr=NULL;
-//	}
-//	
-//}
-
 void XOR_wyc(char* dest,char* src1,char* src2,int size){
 	int i;
 	
@@ -522,9 +741,133 @@ void XOR_wyc(char* dest,char* src1,char* src2,int size){
 	}
 }
 
+void* parchInputPthead(void* arg){
+
+	parch_pthread_arg* parchArgPtr=(parch_pthread_arg*)arg;
+	int  	node_index=parchArgPtr->node_index;
+	int 	pbuf_index=parchArgPtr->pbuf_index;
+	int		count=0;
+	int	 	shouldGet=CHUNK_SIZE;
+	int  	nbytes;
+	int	 	realGet;
+	data_request localDataRequest;
+	char*	buf_chunk;
+	if(0!=posix_memalign((void**)&(buf_chunk),getpagesize(),CHUNK_SIZE)){
+		perror("error malloc in parchInputPthread");
+		exit(1);
+	}
+
+	int fd;
+	if(node_index==ipSequence){
+	//local
+		fd=localfd;
+	}else{
+	//remote
+		fd=doAsClient(node_index,DATAPORT);
+		localDataRequest.blockID=0;
+		localDataRequest.codingNode=ipSequence;
+		localDataRequest.codeWay=2;
+		if((write(fd,&localDataRequest,sizeof(data_request)))!=sizeof(data_request)){
+			perror("error:write dataRequest");
+			exit(1);
+		}
+	}
+
+	while(count<CHUNK_NUM){
+		
+		realGet=0;
+		while(realGet<shouldGet){
+			if((nbytes=read(fd,buf_chunk+realGet,shouldGet-realGet))<0){
+				perror("error read in parchInputThread");
+				exit(1);
+			}else{
+				realGet += nbytes;
+			}
+		}
+		printf("(node %d,count %d)in pbuf number:%d\n",node_index,count,pbuf_index);
+		updata_in_pbuf(pbuf_manager_ptr->pbuf_address[pbuf_index],buf_chunk,CHUNK_SIZE,count*CHUNK_SIZE);
+		count++ ;
+	}
+
+	free(buf_chunk);
+
+	return ((void*)0);
+}
+
+void* codeMainPArch(void* arg){
+	int i;
+	int* numDetailPtr;
+	int		count=0;
+	coding_strip_str* encodeArg=(coding_strip_str*)arg;
+	int k_rs=encodeArg->data_blocks_num;
+	int r_rs=encodeArg->parity_blocks_num;
+	//get pbuf
+	int* pbufArr;
+	if(NULL==(pbufArr=(int*)malloc(encodeArg->data_blocks_num*sizeof(int)))){
+		perror("error malloc in codeMainPArch");
+		exit(1);
+	}
+	pthread_mutex_lock(&(pbuf_manager_ptr->managerMutex));
+	for(i=0;i<encodeArg->data_blocks_num;i++){
+		pbufArr[i]=get_pbuf();
+	}
+	pthread_mutex_unlock(&(pbuf_manager_ptr->managerMutex));
+	
+	//thread
+	parch_pthread_arg* pthreadArgArr;
+	if(NULL==(pthreadArgArr=(parch_pthread_arg*)malloc
+		(encodeArg->data_blocks_num*sizeof(parch_pthread_arg)))){
+		perror("error malloc");
+		exit(1);
+	}
+	pthread_t parchPthread;
+	for(i=0;i<encodeArg->data_blocks_num;i++){
+		pthreadArgArr[i].node_index = encodeArg->data_node_arr[i];
+		pthreadArgArr[i].pbuf_index = pbufArr[i];
+		if(0!=(pthread_create(&parchPthread,&detachAttr,parchInputPthead,(void*)(pthreadArgArr+i)))){
+			perror("error:pthread_create smartnodeRecvFrom");
+			exit(1);
+		}
+	}
+	//calculate
+	char** bufArr;
+	if(NULL==(bufArr=(char**)malloc((k_rs+r_rs)*(sizeof(char*))))){
+		perror("error malloc in codeMainPArch");
+		exit(1);
+	}
+	for(i=0;i<(k_rs+r_rs);i++){
+		if(NULL==(bufArr[i]=(char*)malloc(CHUNK_SIZE*sizeof(char)))){
+			perror("error malloc in codeMainPArch");
+			exit(1);
+		}
+	}
+
+	while(count<CHUNK_NUM){
+	//get data without calculate and write
+		for(i=0;i<k_rs;i++){
+			printf("(done count %d)out pbuf number:%d\n",count,pbufArr[i]);
+			updata_out_pbuf(pbuf_manager_ptr->pbuf_address[pbufArr[i]],bufArr[i]);
+		}
+		count++ ;
+	}
+
+	//put cache
+	pthread_mutex_lock(&(pbuf_manager_ptr->managerMutex));
+	for(i=0;i<encodeArg->data_blocks_num;i++){
+		put_pbuf(pbufArr[i]);
+	}
+	pthread_mutex_unlock(&(pbuf_manager_ptr->managerMutex));
+
+	for(i=0;i<(k_rs+r_rs);i++)
+		free(bufArr[i]);
+	free(bufArr);
+	free(pthreadArgArr);
+	free(pbufArr);
+	return ((void*)0) ;
+}
+
 void* codeMain(void* arg){
 	int i,j;
-//	char*	buffer=NULL;
 	int	codeMainSocket[K_MAX];
 	struct timeval start,end;
 	struct timeval codeStart,codeEnd;
@@ -548,21 +891,8 @@ void* codeMain(void* arg){
 		perror("error posix_memalign CHUNKSIZE");
 		exit(1);
 	}
-//	for(i=0;i<R_MAX;i++)
-//		if(0!=posix_memalign((void**)&(codeMainStr.checkBuffer[i]),getpagesize(),CHUNK_SIZE)){
-//			perror("error posix_memalign CHUNKSIZE");
-//			exit(1);
-//		}
 	
 	data_request dataRequest;
-	
-
-//	if((buffer=(char*)malloc(CHUNK_SIZE))==NULL){
-//		perror("error:malloc buffer");
-//		exit(1);
-//	}
-
-//	printf("****111111\n");
 	
 	for(i=0;i<encodeArg->data_blocks_num;i++){
 		if(encodeArg->data_node_arr[i]==ipSequence){
@@ -575,8 +905,6 @@ void* codeMain(void* arg){
 		printf("%d socket:%d\n",i,codeMainSocket[i]);
 	}
 	
-//	printf("****222222\n");
-
 	dataRequest.codingNode=ipSequence;
 	for(i=0;i<encodeArg->data_blocks_num;i++)
 		if(encodeArg->data_node_arr[i]!=ipSequence){
@@ -587,8 +915,6 @@ void* codeMain(void* arg){
 			}
 			printf("%d,data_request:%d,%d\n",i,dataRequest.blockID,dataRequest.codingNode);
 		}
-
-//	printf("****333333\n");
 
 	codeMainStr.totoalNum=CHUNK_NUM;
 	codeMainStr.curNum=0;
@@ -605,10 +931,7 @@ void* codeMain(void* arg){
 		
 		//data from
 		for(i=0;i<encodeArg->data_blocks_num;i++){
-//			printf("data from:%d(socket:%d)\n",encodeArg->data_node_arr[i],codeMainSocket[i]);
 			if(encodeArg->data_node_arr[i]==ipSequence){
-			//local
-//				memcpy(codeMainStr.dataBuffer[i],buffer,CHUNK_SIZE);
 				lseekRam=rand();
 				lseekRam = lseekRam - lseekRam%getpagesize();
 				gettimeofday(&start,NULL);
@@ -633,10 +956,6 @@ void* codeMain(void* arg){
 			}else{
 			//socket
 				nowBytes=0;
-//				if(0>fprintf(stripTimeResultFile,"nowBytes:%d,shouldBytes:%d\n",nowBytes,shouldBytes)){
-//					perror("error:fprintf diskRateFile");
-//					exit(1);
-//				}
 				gettimeofday(&start,NULL);
 				while(nowBytes<shouldBytes){
 					if((nBytes=read(codeMainSocket[i],codeMainStr.dataBuffer[i]+nowBytes,
@@ -645,38 +964,17 @@ void* codeMain(void* arg){
 						exit(1);
 					}
 					nowBytes += nBytes;
-//					if(0>fprintf(stripTimeResultFile,"nowBytes:%d,shouldBytes:%d,nBytes:%d\n",nowBytes,shouldBytes,nBytes)){
-//						perror("error:fprintf diskRateFile");
-//						exit(1);
-//					}
 				}
 				gettimeofday(&end,NULL);
 				timecost = ((end.tv_sec-start.tv_sec)+(end.tv_usec-start.tv_usec)*0.000001);
 				socketTimetotal += timecost;
-//				if(0>fprintf(stripTimeResultFile,"socket:%d,start:%ld:%ld    end:%ld:%ld\n",codeMainSocket[i],
-//					(long)start.tv_sec,(long)start.tv_usec,
-//					(long)end.tv_sec,(long)end.tv_usec)){
-//					perror("error:fprintf diskRateFile");
-//					exit(1);
-//				}
-//				if(0>fprintf(stripTimeResultFile,"socket read,stripID(%d) rate(%lfMBPS:%lf,%lf)\n",encodeArg->stripID,
-//					((double)CHUNK_SIZE/1024/1024)/((end.tv_sec-start.tv_sec)+(end.tv_usec-start.tv_usec)*0.000001),
-//					((double)CHUNK_SIZE/1024/1024),((end.tv_sec-start.tv_sec)+(end.tv_usec-start.tv_usec)*0.000001))){
-//					perror("error:fprintf diskRateFile");
-//					exit(1);
-//				}
+
 			}
 		}
-		//data deal
-//		for(i=0;i<encodeArg->parity_blocks_num;i++)
-//			XOR_wyc(codeMainStr.checkBuffer[i],codeMainStr.dataBuffer[0],
-//			codeMainStr.dataBuffer[1],CHUNK_SIZE);
-		//data to
+
 		for(i=0;i<encodeArg->parity_blocks_num;i++){
 			memcpy(parityBuffer+i*BLOCK_SIZE+codeMainStr.curNum*CHUNK_SIZE,
 				codeMainStr.dataBuffer[0],CHUNK_SIZE);
-//			lseekRam=rand();
-//			lseekRam = lseekRam - lseekRam%getpagesize();
 			if(0>fprintf(diskRateFile,"disk write,stripID(%d) rate(%lfMBPS)\n",encodeArg->stripID,
 				((double)CHUNK_SIZE/1024/1024)/((end.tv_sec-start.tv_sec)+(end.tv_usec-start.tv_usec)*0.000001))){
 				perror("error:fprintf diskRateFile");
@@ -684,7 +982,6 @@ void* codeMain(void* arg){
 			}
 		}
 		(codeMainStr.curNum)++;
-//		printf("codeMain:%d(%d)\n",codeMainStr.curNum,codeMainStr.totoalNum);
 	}
 
 		gettimeofday(&start,NULL);
@@ -711,8 +1008,6 @@ void* codeMain(void* arg){
 
 	for(i=0;i<K_MAX;i++)
 		free(codeMainStr.dataBuffer[i]);
-//	for(i=0;i<R_MAX;i++)
-//		free(codeMainStr.checkBuffer[i]);
 	
 	free(parityBuffer);
 
@@ -774,10 +1069,22 @@ void* smartnodeRecvFrom(void* arg){
 	}
 	printf("datanode waiting:encode strip\n");
 	recvcoding_strip_str(socket,codingStripStr);
-	if((pthread_create(&encodePthread,NULL,codeMain,codingStripStr))!=0){
-		perror("error:pthread_create encoding");
-		exit(1);
+	if(codingStripStr->codeWay==2){
+		
+		if((pthread_create(&encodePthread,NULL,codeMainPArch,codingStripStr))!=0){
+				perror("error:pthread_create encoding");
+				exit(1);
+		}
+
+	}else{
+	
+		if((pthread_create(&encodePthread,NULL,codeMain,codingStripStr))!=0){
+				perror("error:pthread_create encoding");
+				exit(1);
+		}
+		
 	}
+	
 
 	pthread_join(encodePthread,NULL);
 
