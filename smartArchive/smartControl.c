@@ -52,6 +52,7 @@ void free_wyc();
 void getBlocks2NodesMap();
 void printBlocks2NodesMap();
 //void getRandomBlocksConfig(int blocks,int rep_factor,int nodes);
+void chooseCodingnodeByCenterLocality(int blockID,int k,int r,coding_strip_str* codestruct);
 void chooseCodingnodeByLocality(int blockID,int k,int r,coding_strip_str* codestruct);
 void chooseCodingnodeByBalance(int blockID,int k,int r,coding_strip_str* codestruct);
 void chooseCodingnodeByBalAndLol(int blockID,int k,int r,coding_strip_str* codestruct);
@@ -80,7 +81,7 @@ void init_wyc(){
 		encodingStrip[i]=NULL;
 	actionSocketCount=0;
 	encodingStripID=0;
-	encodingNodeChooseWay=3;    //1 DArch 2 PArch 3 BArch
+	encodingNodeChooseWay=0;    // 0 CArch 1 DArch 2 PArch 3 BArch
 
 	getIP();					//read IP from file
 //	smartSocketToDatanode();	//socket smartnode to every datanode
@@ -262,7 +263,7 @@ void* encodeNodeChoose(){
 		switch (encodingNodeChooseWay){
 			case 0:
 				//CArch
-				//chooseCodingnodeByLocality(i,RS_K,RS_R,encodingStrip[encodingStripID]);
+				chooseCodingnodeByCenterLocality(i,RS_K,RS_R,encodingStrip[encodingStripID]);
 				break;
 			case 1:
 				//DArch
@@ -575,6 +576,70 @@ void chooseCodingnodeByBalance(int blockID,int k,int r,coding_strip_str* codestr
 		}
 	}
 }
+
+void chooseCodingnodeByCenterLocality(int blockID,int k,int r,coding_strip_str* codestruct){
+	int i,j,max,maxIndex;
+	int *localityCount=malloc(sizeof(int)*node_cur_max);
+	int encode_node=1;
+
+	codestruct->locality=0;
+	
+	for(i=0;i<node_cur_max;i++)
+		localityCount[i]=0;
+	for(i=0;i<k;i++){
+		for(j=0;j<node_cur_max;j++){
+			if(BLK_2_ND[j][blockID+i]==1)
+				localityCount[j]++;
+		}
+	}
+	for(i=0;i<node_cur_max;i++){
+		if(localityCount[i]!=0)
+			printf("node:%d,LocalityCount:%d\n",i,localityCount[i]);
+	}
+	//get first blockID
+	codestruct->first_blockID=blockID;
+	//get k
+	if(k>K_MAX){
+		printf("error:K_MAX\n");
+		exit(1);
+	}
+	codestruct->data_blocks_num=k;
+	//get r
+	codestruct->parity_blocks_num=r;
+	//get coding node
+//	max=0;
+//	maxIndex=0;
+//	for(i=0;i<node_cur_max;i++)
+//		if(localityCount[i]>max){
+//			max=localityCount[i];
+//			maxIndex=i;
+//		}
+	codestruct->coding_node=encode_node;
+//	TASK_MAP[codestruct->coding_node] += codestruct->parity_blocks_num;
+	//get data node
+	for(i=0;i<k;i++){
+		if(BLK_2_ND[encode_node][blockID+i]==1){
+			codestruct->data_node_arr[i]=encode_node;
+			(codestruct->locality)++;
+		}else{
+			max=0;
+			maxIndex=0;
+			for(j=0;j<node_cur_max;j++)
+				if(BLK_2_ND[j][blockID+i]==1){
+					if(localityCount[j]>max){
+						max=localityCount[j];
+						maxIndex=j;
+					}
+				}
+			codestruct->data_node_arr[i]=maxIndex;
+			TASK_MAP[maxIndex]++;
+			TASK_MAP[encode_node]++;
+		}
+	}
+	printf("coding node:%d\n",codestruct->coding_node);
+	free(localityCount);
+}
+
 
 void chooseCodingnodeByLocality(int blockID,int k,int r,coding_strip_str* codestruct){
 	int i,j,max,maxIndex;
