@@ -548,6 +548,7 @@ void codeSub_read_dire(int socket){
 	free(chunk_buf);
 }
 
+
 void* readWithCache(void* cache_index_ptr){
 	int i;
 	char* chunk_buf;
@@ -866,6 +867,170 @@ void* codeMainPArch(void* arg){
 	return ((void*)0) ;
 }
 
+void* codeMainBArch(void* arg){
+	int i,j;
+	int	codeMainSocket[K_MAX];
+	struct timeval start,end;
+	struct timeval codeStart,codeEnd;
+	double	readTimeTotal=0,socketTimetotal=0,writeTimetotal=0;
+	double 	timecost;
+
+	coding_strip_str* encodeArg=(coding_strip_str*)arg;
+	char* parityBuffer;
+
+	erase_code_main codeMainStr;
+
+	gettimeofday(&codeStart,NULL);
+	
+	for(i=0;i<K_MAX;i++)
+		if(0!=posix_memalign((void**)&(codeMainStr.dataBuffer[i]),getpagesize(),CHUNK_SIZE)){
+			perror("error posix_memalign CHUNKSIZE");
+			exit(1);
+		}
+	//buffer all the parity block
+	if(0!=posix_memalign((void**)&(parityBuffer),getpagesize(),encodeArg->parity_blocks_num*BLOCK_SIZE)){
+		perror("error posix_memalign CHUNKSIZE");
+		exit(1);
+	}
+	
+	data_request dataRequest;
+	
+	for(i=0;i<encodeArg->data_blocks_num;i++){
+		if(encodeArg->data_node_arr[i]==ipSequence){
+			codeMainSocket[i]=0;
+		}else{
+			codeMainSocket[i]=doAsClient(encodeArg->data_node_arr[i],DATAPORT);
+		}
+	}
+	for(i=0;i<encodeArg->data_blocks_num;i++){
+		printf("%d socket:%d\n",i,codeMainSocket[i]);
+	}
+	
+	dataRequest.codingNode=ipSequence;
+	for(i=0;i<encodeArg->data_blocks_num;i++)
+		if(encodeArg->data_node_arr[i]!=ipSequence){
+			dataRequest.blockID=encodeArg->first_blockID+i;
+			if((write(codeMainSocket[i],&dataRequest,sizeof(data_request)))!=sizeof(data_request)){
+				perror("error:write dataRequest");
+				exit(1);
+			}
+			printf("%d,data_request:%d,%d\n",i,dataRequest.blockID,dataRequest.codingNode);
+		}
+
+	codeMainStr.totoalNum=CHUNK_NUM;
+	codeMainStr.curNum=0;
+	
+	int shouldBytes=CHUNK_SIZE,nowBytes,nBytes;
+	int lseekRam=rand();
+	lseekRam = lseekRam - lseekRam%getpagesize();
+	if((lseek(localfd,(off_t)lseekRam,SEEK_SET))==-1){
+		perror("error: lseek");
+		exit(1);
+	}
+	
+	while((codeMainStr.curNum)<(codeMainStr.totoalNum)){
+		
+		//data from
+		for(i=0;i<encodeArg->data_blocks_num;i++){
+			if(encodeArg->data_node_arr[i]==ipSequence){
+//				lseekRam=rand();
+//				lseekRam = lseekRam - lseekRam%getpagesize();
+				gettimeofday(&start,NULL);
+//				if((lseek(localfd,(off_t)lseekRam,SEEK_SET))==-1){
+//					perror("error: lseek");
+//					exit(1);
+//				}
+
+				if((read(localfd,codeMainStr.dataBuffer[i],CHUNK_SIZE))
+					!=CHUNK_SIZE){
+					perror("error3:read disk chunk");
+					exit(1);
+				}
+				gettimeofday(&end,NULL);
+				timecost = ((end.tv_sec-start.tv_sec)+(end.tv_usec-start.tv_usec)*0.000001);
+				readTimeTotal += timecost;
+				if(0>fprintf(diskRateFile,"disk read,stripID(%d) rate(%lfMBPS)\n",encodeArg->stripID,
+					((double)CHUNK_SIZE/1024/1024)/timecost)){
+					perror("error:fprintf diskRateFile");
+					exit(1);
+				}
+			}else{
+			//socket
+				nowBytes=0;
+				gettimeofday(&start,NULL);
+				while(nowBytes<shouldBytes){
+					if((nBytes=read(codeMainSocket[i],codeMainStr.dataBuffer[i]+nowBytes,
+						shouldBytes-nowBytes))==-1){
+						perror("error:read datanode socket data");
+						exit(1);
+					}
+					nowBytes += nBytes;
+				}
+				gettimeofday(&end,NULL);
+				timecost = ((end.tv_sec-start.tv_sec)+(end.tv_usec-start.tv_usec)*0.000001);
+				socketTimetotal += timecost;
+
+			}
+		}
+
+		for(i=0;i<encodeArg->parity_blocks_num;i++){
+			memcpy(parityBuffer+i*BLOCK_SIZE+codeMainStr.curNum*CHUNK_SIZE,
+				codeMainStr.dataBuffer[0],CHUNK_SIZE);
+			if(0>fprintf(diskRateFile,"disk write,stripID(%d) rate(%lfMBPS)\n",encodeArg->stripID,
+				((double)CHUNK_SIZE/1024/1024)/((end.tv_sec-start.tv_sec)+(end.tv_usec-start.tv_usec)*0.000001))){
+				perror("error:fprintf diskRateFile");
+				exit(1);
+			}
+		}
+		(codeMainStr.curNum)++;
+	}
+
+		gettimeofday(&start,NULL);
+		lseekRam=rand();
+		lseekRam = lseekRam - lseekRam%getpagesize();
+		if((lseek(localfd,(off_t)lseekRam,SEEK_SET))==-1){
+			perror("error: lseek");
+			exit(1);
+		}
+		for(i=0;i<(encodeArg->parity_blocks_num*CHUNK_NUM);i++)
+			if((write(localfd,parityBuffer+i*CHUNK_SIZE,CHUNK_SIZE))
+				!=CHUNK_SIZE){
+				perror("error:write disk chunk");
+				exit(1);
+			}
+		gettimeofday(&end,NULL);
+		writeTimetotal = ((end.tv_sec-start.tv_sec)+(end.tv_usec-start.tv_usec)*0.000001);
+
+	for(i=0;i<encodeArg->data_blocks_num;i++){
+		if(encodeArg->data_node_arr[i]!=ipSequence){
+			close(codeMainSocket[i]);
+		}
+	}
+
+	for(i=0;i<K_MAX;i++)
+		free(codeMainStr.dataBuffer[i]);
+	
+	free(parityBuffer);
+
+	gettimeofday(&codeEnd,NULL);
+	printf("codeTime:stripID(%d) totaltime(%lf)[read(%lf),socket(%lf),write(%lf)]\n",
+		encodeArg->stripID,(codeEnd.tv_sec-codeStart.tv_sec)+(codeEnd.tv_usec-codeStart.tv_usec)*0.000001,
+		readTimeTotal,socketTimetotal,writeTimetotal);
+	if(0>fprintf(stripTimeResultFile,"%d,%d,%lf,%lf,%lf,%lf\n",
+		encodeArg->stripID,ipSequence,(codeEnd.tv_sec-codeStart.tv_sec)+(codeEnd.tv_usec-codeStart.tv_usec)*0.000001,
+		readTimeTotal,socketTimetotal,writeTimetotal)){
+		perror("error:fprintf diskRateFile");
+		exit(1);
+	}
+	if(0!=fflush(stripTimeResultFile)){
+		perror("error:fflush");
+		exit(1);
+	}
+
+	return ((void*)0);
+}
+
+
 void* codeMain(void* arg){
 	int i,j;
 	int	codeMainSocket[K_MAX];
@@ -1072,6 +1237,13 @@ void* smartnodeRecvFrom(void* arg){
 	if(codingStripStr->codeWay==2){
 		
 		if((pthread_create(&encodePthread,NULL,codeMainPArch,codingStripStr))!=0){
+				perror("error:pthread_create encoding");
+				exit(1);
+		}
+
+	}else if(codingStripStr->codeWay==3){
+
+		if((pthread_create(&encodePthread,NULL,codeMainBArch,codingStripStr))!=0){
 				perror("error:pthread_create encoding");
 				exit(1);
 		}
